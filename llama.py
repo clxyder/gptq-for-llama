@@ -1,27 +1,33 @@
 import time
+import math
+import argparse
 
 import torch
 import torch.nn as nn
 
-from gptq import *
-from modelutils import *
-from quant import *
+import transformers
+from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedModel
+
+from gptq import GPTQ
+from modelutils import DEV, find_layers
+from quant import quantize, make_quant, Quantizer, QuantLinear
+from datautils import get_loaders
 
 
-def get_llama(model):
+def get_llama(model: str) -> PreTrainedModel:
     import torch
     def skip(*args, **kwargs):
         pass
     torch.nn.init.kaiming_uniform_ = skip
     torch.nn.init.uniform_ = skip
     torch.nn.init.normal_ = skip
-    from transformers import LlamaForCausalLM
-    model = LlamaForCausalLM.from_pretrained(model, torch_dtype='auto')
+
+    model: PreTrainedModel = LlamaForCausalLM.from_pretrained(model, torch_dtype='auto')
     model.seqlen = 2048
     return model
 
 @torch.no_grad()
-def llama_sequential(model, dataloader, dev):
+def llama_sequential(model: PreTrainedModel, dataloader, args, dev):
     print('Starting ...')
 
     use_cache = model.config.use_cache
@@ -48,6 +54,7 @@ def llama_sequential(model, dataloader, dev):
             cache['attention_mask'] = kwargs['attention_mask']
             cache['position_ids'] = kwargs['position_ids']
             raise ValueError
+    
     layers[0] = Catcher(layers[0])
     for batch in dataloader:
         try:
@@ -95,11 +102,14 @@ def llama_sequential(model, dataloader, dev):
                 def tmp(_, inp, out):
                     gptq[name].add_batch(inp[0].data, out.data)
                 return tmp
+            
             handles = []
             for name in subset:
                 handles.append(subset[name].register_forward_hook(add_batch(name)))
+            
             for j in range(args.nsamples):
                 outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids = position_ids)[0]
+            
             for h in handles:
                 h.remove()
 
@@ -124,7 +134,7 @@ def llama_sequential(model, dataloader, dev):
     return quantizers
 
 @torch.no_grad()
-def llama_eval(model, testenc, dev):
+def llama_eval(model, testenc, args, dev):
     print('Evaluating ...')
 
     testenc = testenc.input_ids
@@ -153,6 +163,7 @@ def llama_eval(model, testenc, dev):
             cache['attention_mask'] = kwargs['attention_mask']
             cache['position_ids'] = kwargs['position_ids']
             raise ValueError
+    
     layers[0] = Catcher(layers[0])
     for i in range(nsamples):
         batch = testenc[:, (i * model.seqlen):((i + 1) * model.seqlen)].to(dev)
@@ -232,8 +243,7 @@ def llama_pack(model, quantizers, wbits, groupsize):
     print('Done.')
     return model
 
-def load_quant(model, checkpoint, wbits, groupsize=-1):
-    from transformers import LlamaConfig, LlamaForCausalLM 
+def load_quant(model, checkpoint, wbits, groupsize=-1): 
     config = LlamaConfig.from_pretrained(model)
     def noop(*args, **kwargs):
         pass
@@ -348,11 +358,7 @@ def benchmark(model, input_ids, check=False):
             print('PPL:', torch.exp(tot / (input_ids.numel() - 1)).item())
             print('max memory(MiB):',max_memory)
 
-
-if __name__ == '__main__':
-    import argparse
-    from datautils import *
-
+def get_arg_parser():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -431,7 +437,13 @@ if __name__ == '__main__':
         '--new-eval', action='store_true',
         help='Whether to use the new PTB and C4 eval'
     )
-    
+
+    return parser
+
+
+if __name__ == '__main__':    
+
+    parser = get_arg_parser()
     args = parser.parse_args()
 
     if type(args.load) is not str:
@@ -449,7 +461,7 @@ if __name__ == '__main__':
 
     if not args.load and args.wbits < 16 and not args.nearest:
         tick = time.time()
-        quantizers = llama_sequential(model, dataloader, DEV)
+        quantizers = llama_sequential(model, dataloader, args, DEV)
         print(time.time() - tick)
         
     if args.benchmark:
@@ -474,7 +486,7 @@ if __name__ == '__main__':
                 dataset, seed=args.seed, model=args.model, seqlen=model.seqlen
             )
             print(dataset)
-            llama_eval(model, testloader, DEV)
+            llama_eval(model, testloader, args, DEV)
 
     if args.save:
         llama_pack(model, quantizers, args.wbits, args.groupsize)
