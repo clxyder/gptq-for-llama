@@ -1,14 +1,23 @@
+from typing import Tuple, List, Union
+
 import numpy as np
 import torch
 
+from datasets import load_dataset
+from transformers import PreTrainedTokenizerBase
 
-def set_seed(seed):
+
+class TokenizerWrapper:
+    def __init__(self, input_ids: torch.Tensor) -> None:
+        self.input_ids = input_ids
+
+
+def set_seed(seed: int) -> None:
     np.random.seed(seed)
     torch.random.manual_seed(seed)
 
 
-def get_wikitext2(nsamples, seed, seqlen, model):
-    from datasets import load_dataset
+def get_wikitext2(nsamples: int, seed: int, seqlen: int, model: str) -> Tuple[List, PreTrainedTokenizerBase]:
     traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
     testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
 
@@ -29,8 +38,8 @@ def get_wikitext2(nsamples, seed, seqlen, model):
         trainloader.append((inp, tar))
     return trainloader, testenc
 
-def get_ptb(nsamples, seed, seqlen, model):
-    from datasets import load_dataset
+
+def get_ptb(nsamples: int, seed: int, seqlen: int, model: str) -> Tuple[List, PreTrainedTokenizerBase]:
     traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
     valdata = load_dataset('ptb_text_only', 'penn_treebank', split='validation')
 
@@ -51,8 +60,8 @@ def get_ptb(nsamples, seed, seqlen, model):
         trainloader.append((inp, tar))
     return trainloader, testenc
 
-def get_c4(nsamples, seed, seqlen, model):
-    from datasets import load_dataset
+
+def get_c4(nsamples: int, seed: int, seqlen: int, model: str) -> Tuple[List, TokenizerWrapper]:
     traindata = load_dataset(
         'allenai/c4', 'allenai--c4', data_files={'train': 'en/c4-train.00000-of-01024.json.gz'}, split='train', use_auth_token=False
     )
@@ -92,16 +101,12 @@ def get_c4(nsamples, seed, seqlen, model):
         j = i + seqlen
         valenc.append(tmp.input_ids[:, i:j])
     valenc = torch.hstack(valenc)
-    class TokenizerWrapper:
-        def __init__(self, input_ids):
-            self.input_ids = input_ids
     valenc = TokenizerWrapper(valenc)
 
     return trainloader, valenc 
 
 
-
-def get_ptb_new(nsamples, seed, seqlen, model):
+def get_ptb_new(nsamples: int, seed: int, seqlen: int, model: str) -> Tuple[List, PreTrainedTokenizerBase]:
     from datasets import load_dataset
     traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
     testdata = load_dataset('ptb_text_only', 'penn_treebank', split='test')
@@ -123,7 +128,8 @@ def get_ptb_new(nsamples, seed, seqlen, model):
         trainloader.append((inp, tar))
     return trainloader, testenc
 
-def get_c4_new(nsamples, seed, seqlen, model):
+
+def get_c4_new(nsamples: int, seed: int, seqlen: int, model: str) -> Tuple[List, TokenizerWrapper]:
     from datasets import load_dataset
     traindata = load_dataset(
         'allenai/c4', 'allenai--c4', data_files={'train': 'en/c4-train.00000-of-01024.json.gz'}, split='train'
@@ -153,16 +159,12 @@ def get_c4_new(nsamples, seed, seqlen, model):
 
     valenc = tokenizer(' '.join(valdata[:1100]['text']), return_tensors='pt')
     valenc = valenc.input_ids[:, :(256 * seqlen)]
-
-    class TokenizerWrapper:
-        def __init__(self, input_ids):
-            self.input_ids = input_ids
     valenc = TokenizerWrapper(valenc)
 
     return trainloader, valenc
-def get_loaders(
-    name, nsamples=128, seed=0, seqlen=2048, model=''
-):
+
+
+def get_loaders(name: str, nsamples=128, seed=0, seqlen=2048, model='') -> Tuple[List, Union[TokenizerWrapper, PreTrainedTokenizerBase]]:
     if 'wikitext2' in name:
         return get_wikitext2(nsamples, seed, seqlen, model)
     if 'ptb' in name:
